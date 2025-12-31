@@ -23,7 +23,18 @@ import json
 import pickle
 import random
 from pathlib import Path
+
+# NumPy 2.0+ compatibility fix for pickle files created with older numpy
+import sys
 import numpy as np
+if not hasattr(np, '_core'):
+    np._core = np.core
+    sys.modules['numpy._core'] = np.core
+if not hasattr(np, '_core._multiarray_umath'):
+    try:
+        sys.modules['numpy._core._multiarray_umath'] = np.core._multiarray_umath
+    except AttributeError:
+        pass
 
 
 def load_bucketing(json_path: str):
@@ -47,82 +58,86 @@ def get_scenarios_from_bucket(bucketing: dict, bucket_id: int, num_scenarios: in
 
 def load_and_run_scenario(scenario_path: str, render: bool = True):
     """
-    Load a Waymo scenario and run it in MetaDrive.
+    Load a Waymo scenario and replay it using ReplayEgoCarPolicy.
     
     Args:
         scenario_path: Path to .pkl file
         render: Whether to render visually
     """
     try:
-        from metadrive import MetaDriveEnv
-        from metadrive.policy.idm_policy import IDMPolicy
+        import sys
+        from pathlib import Path
         
-        # Load scenario
-        with open(scenario_path, 'rb') as f:
-            scenario = pickle.load(f)
+        scenario_path = Path(scenario_path)
+        scenario_dir = scenario_path.parent
+        
+        # Add rig metadrive to path
+        rig_metadrive = Path(__file__).parent.parent.parent / "rig" / "metadrive"
+        if rig_metadrive.exists():
+            sys.path.insert(0, str(rig_metadrive))
+        
+        from metadrive.envs.custom_scenario_env import CustomScenarioEnv
+        from metadrive.policy.replay_policy import ReplayEgoCarPolicy
+        from metadrive.scenario.utils import read_dataset_summary
+        
+        # Find scenario index
+        summary = read_dataset_summary(str(scenario_dir))
+        try:
+            files = summary[1] if isinstance(summary, tuple) else summary.get("scenario_files", [])
+        except:
+            files = list(scenario_dir.glob("*.pkl"))
+            files = [str(f) for f in sorted(files)]
+        
+        try:
+            scenario_index = next(i for i, f in enumerate(files) if scenario_path.name in str(f))
+        except StopIteration:
+            scenario_index = 0
         
         print(f"\n{'='*80}")
-        print(f"Running: {Path(scenario_path).name}")
+        print(f"Running: {scenario_path.name}")
         print(f"{'='*80}")
         
-        # Create MetaDrive env with this scenario
+        # Use same config as data_collection.py replay function
         config = {
-            'use_render': render,
-            'manual_control': False,
-            'traffic_density': 0.0,  # Will use scenario traffic
-            'start_seed': 0,
-            'image_observation': False,
+            "manual_control": False,
+            "reactive_traffic": False,
+            "use_render": render,
+            "agent_policy": ReplayEgoCarPolicy,  # Replays original Waymo trajectory
+            "data_directory": str(scenario_dir),
+            "start_scenario_index": scenario_index,
+            "num_scenarios": 1,
+            "window_size": (1920, 1080),
+            "camera_dist": 10.0,
+            "camera_height": 3.5,
+            "camera_fov": 80,
         }
         
-        # If scenario is a ScenarioNet-compatible format
-        if 'map_features' in scenario or 'tracks' in scenario:
-            # Use MetaDrive's scenario replay
-            config['data_directory'] = str(Path(scenario_path).parent)
-            config['case_num'] = 1
-            env = MetaDriveEnv(config)
-        else:
-            # Fall back to standard env
-            env = MetaDriveEnv(config)
-        
-        # Run with IDM policy
-        policy = IDMPolicy(env, 0)
+        env = CustomScenarioEnv(config)
         obs, info = env.reset()
-        policy.reset()
         
+        print("Replaying scenario (press Q/ESC to close)...")
         done = False
         truncated = False
         step = 0
-        total_reward = 0
         
-        print(f"Running scenario...")
-        while not (done or truncated) and step < 1000:
-            action = policy.act(obs)
+        while not (done or truncated) and step < 2000:
+            # ReplayEgoCarPolicy handles actions automatically
+            action = [0.0, 0.0]  # Neutral, policy will override
             obs, reward, done, truncated, info = env.step(action)
-            total_reward += reward
             step += 1
-            
-            if render and step % 10 == 0:
-                print(f"  Step {step}, Reward: {total_reward:.2f}", end='\r')
         
-        success = info.get('arrive_dest', False)
-        print(f"\n{'='*80}")
-        print(f"Finished: {step} steps, Reward: {total_reward:.2f}, Success: {success}")
-        print(f"{'='*80}\n")
-        
+        print(f"\nFinished: {step} steps")
         env.close()
         
-        return {
-            'steps': step,
-            'reward': total_reward,
-            'success': success,
-        }
+        return {'success': True, 'steps': step}
         
-    except ImportError:
-        print("❌ MetaDrive not installed!")
-        print("   Install: pip install metadrive-simulator")
+    except ImportError as e:
+        print(f"❌ Import error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
     except Exception as e:
-        print(f"❌ Error running scenario: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -245,7 +260,8 @@ if __name__ == "__main__":
     )
     parser.add_argument('--buckets', type=str, required=True,
                         help='Bucketing JSON file')
-    parser.add_argument('--scenario_dir', type=str, required=True,
+    parser.add_argument('--scenario_dir', type=str, 
+                        default='../data/waymo/converted/waymo_converted_test_0/',
                         help='Directory with scenario .pkl files')
     parser.add_argument('--bucket_id', type=str, default=None,
                         help='Bucket ID(s) to validate (comma-separated for comparison)')

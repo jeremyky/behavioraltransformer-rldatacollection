@@ -1,0 +1,24 @@
+name: betail
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - numpy<2.0
+  - scipy
+  - matplotlib
+  - pillow
+  - tqdm
+  - pip:
+    # MetaDrive and scenario handling
+    - metadrive-simulator
+    # Machine learning
+    - scikit-learn
+    - gym==0.21
+    - gymnasium
+    # Optional: PyTorch (install separately based on your system)
+    # For CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    # For MPS (Apple Silicon): pip install torch torchvision torchaudio
+    # For CPU: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+

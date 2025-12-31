@@ -167,7 +167,8 @@ def compute_curvature_stats(centerline: np.ndarray) -> Dict:
     dheadings = np.diff(headings)
     
     # Curvature = angular change / arc length
-    kappa = np.abs(dheadings[:-1] / (segment_lengths[1:] + 1e-6))
+    # dheadings has shape (n-2,), segment_lengths[1:] has shape (n-2,)
+    kappa = np.abs(dheadings / (segment_lengths[1:] + 1e-6))
     
     return {
         'length_m': float(total_length),

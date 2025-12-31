@@ -7,3 +7,20 @@
 # Ignore all shell scripts
 *.sh
 
+# Ignore large data files
+data/**/*.pkl
+data/**/*.npz
+data/**/*.h5
+data/**/*.hdf5
+data/**/*.tfrecord*
+data/models/**/*.pt
+data/models/**/*.pth
+data/models/**/*.ckpt
+data/models/**/*.safetensors
+
+# But allow small metadata files
+!data/**/*.json
+!data/**/*.txt
+!data/**/*.yaml
+!data/**/*.yml
+
