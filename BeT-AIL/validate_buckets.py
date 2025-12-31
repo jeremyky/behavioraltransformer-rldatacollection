@@ -22,10 +22,10 @@ Usage:
 import json
 import pickle
 import random
+import sys
 from pathlib import Path
 
 # NumPy 2.0+ compatibility fix for pickle files created with older numpy
-import sys
 import numpy as np
 if not hasattr(np, '_core'):
     np._core = np.core
@@ -56,20 +56,27 @@ def get_scenarios_from_bucket(bucketing: dict, bucket_id: int, num_scenarios: in
     return random.sample(scenarios, num_scenarios)
 
 
-def load_and_run_scenario(scenario_path: str, render: bool = True):
+def load_and_run_scenario(scenario_path: str, render: bool = True, image_dir: Path = None):
     """
     Load a Waymo scenario and replay it using ReplayEgoCarPolicy.
+    Captures screenshots of initial position and trajectory.
     
     Args:
         scenario_path: Path to .pkl file
         render: Whether to render visually
+        image_dir: Directory to save screenshots
     """
     try:
         import sys
+        import pygame
         from pathlib import Path
+        
+        # Initialize pygame for keyboard events
+        pygame.init()
         
         scenario_path = Path(scenario_path)
         scenario_dir = scenario_path.parent
+        scenario_id = scenario_path.stem
         
         # Add rig metadrive to path
         rig_metadrive = Path(__file__).parent.parent.parent / "rig" / "metadrive"
@@ -115,22 +122,113 @@ def load_and_run_scenario(scenario_path: str, render: bool = True):
         env = CustomScenarioEnv(config)
         obs, info = env.reset()
         
-        print("Replaying scenario (press Q/ESC to close)...")
+        # Initialize topdown renderer first
+        if image_dir:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            # Initialize renderer
+            env.render(
+                mode="topdown",
+                screen_size=(1600, 1600),
+                film_size=(2000, 2000),
+                target_vehicle_heading_up=True,
+                semantic_map=True,
+            )
+        
+        # Capture initial position (top-down view)
+        if image_dir:
+            try:
+                # Render top-down view for initial position
+                topdown_img = env.render(
+                    mode="topdown",
+                    screen_size=(1600, 1600),
+                    film_size=(2000, 2000),
+                    target_vehicle_heading_up=True,
+                    semantic_map=True,
+                    to_image=False,  # Returns pygame surface
+                )
+                if topdown_img is not None:
+                    initial_path = image_dir / f"{scenario_id}_initial.png"
+                    pygame.image.save(topdown_img, str(initial_path))
+                    print(f"  ✓ Saved initial position: {initial_path.name}")
+            except Exception as e:
+                print(f"  ⚠️  Could not save initial screenshot: {e}")
+        
+        print("Replaying scenario... (Press 'N' for next, 'Q' to quit)")
         done = False
         truncated = False
         step = 0
+        next_scenario = False
+        quit_requested = False
         
-        while not (done or truncated) and step < 2000:
-            # ReplayEgoCarPolicy handles actions automatically
-            action = [0.0, 0.0]  # Neutral, policy will override
+        # Run scenario to completion with keyboard controls
+        while not (done or truncated) and step < 2000 and not next_scenario and not quit_requested:
+            # Check for keyboard input
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_n or event.key == pygame.K_RETURN:
+                        next_scenario = True
+                        print("\n  → Next scenario requested")
+                        break
+                    elif event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                        quit_requested = True
+                        print("\n  → Quit requested")
+                        break
+            
+            if next_scenario or quit_requested:
+                break
+            
+            action = [0.0, 0.0]
             obs, reward, done, truncated, info = env.step(action)
+            
+            # Render normally
+            if render:
+                env.render()
+            
             step += 1
         
+        # Capture final trajectory (top-down view with full path)
+        if image_dir and not quit_requested:
+            try:
+                topdown_img = env.render(
+                    mode="topdown",
+                    screen_size=(1600, 1600),
+                    film_size=(2000, 2000),
+                    target_vehicle_heading_up=True,
+                    semantic_map=True,
+                    to_image=False,  # Returns pygame surface
+                )
+                if topdown_img is not None:
+                    trajectory_path = image_dir / f"{scenario_id}_trajectory.png"
+                    pygame.image.save(topdown_img, str(trajectory_path))
+                    print(f"  ✓ Saved trajectory: {trajectory_path.name}")
+            except Exception as e:
+                print(f"  ⚠️  Could not save trajectory screenshot: {e}")
+        
+        if quit_requested:
+            print(f"\nQuitting...")
+            try:
+                env.close()
+            except:
+                pass
+            return {'success': False, 'quit': True, 'steps': step}
+        
         print(f"\nFinished: {step} steps")
-        env.close()
         
-        return {'success': True, 'steps': step}
+        # Close environment properly - this should close the window
+        try:
+            env.close()
+        except:
+            pass
         
+        # Small delay to ensure cleanup
+        import time
+        time.sleep(0.3)
+        
+        return {'success': True, 'steps': step, 'next': next_scenario}
+        
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+        return {'success': False, 'quit': True}
     except ImportError as e:
         print(f"❌ Import error: {e}")
         import traceback
@@ -253,6 +351,7 @@ def interactive_validation(bucketing: dict, scenario_dir: str):
 
 if __name__ == "__main__":
     import argparse
+    import sys
     
     parser = argparse.ArgumentParser(
         description='Validate scenario buckets by running scenarios',
@@ -269,6 +368,10 @@ if __name__ == "__main__":
                         help='Number of scenarios to run per bucket')
     parser.add_argument('--interactive', action='store_true',
                         help='Interactive mode')
+    parser.add_argument('--save_images', action='store_true',
+                        help='Save screenshots of initial position and trajectory')
+    parser.add_argument('--image_dir', type=str, default='data/waymo/buckets/images',
+                        help='Directory to save screenshots')
     
     args = parser.parse_args()
     
@@ -295,16 +398,50 @@ if __name__ == "__main__":
                 print_bucket_info(bucketing, bucket_id)
                 scenarios = get_scenarios_from_bucket(bucketing, bucket_id, args.num_scenarios)
                 
+                image_dir = Path(args.image_dir) / f"bucket_{bucket_id}" if args.save_images else None
+                
                 for i, scenario_info in enumerate(scenarios, 1):
                     print(f"\n--- Bucket {bucket_id}, Scenario {i}/{len(scenarios)} ---")
                     scenario_path = scenario_info['file_path']
                     if not Path(scenario_path).exists():
                         scenario_path = str(Path(args.scenario_dir) / Path(scenario_path).name)
                     
-                    result = load_and_run_scenario(scenario_path, render=True)
+                    result = load_and_run_scenario(scenario_path, render=True, image_dir=image_dir)
                     
-                    if i < len(scenarios) or bucket_id != bucket_ids[-1]:
-                        input("\nPress Enter to continue...")
+                    # Check if user wants to quit
+                    if result and result.get('quit'):
+                        sys.exit(0)
+                    
+                    # If not auto-advancing, wait for next key
+                    if not result or not result.get('next'):
+                        if i < len(scenarios):
+                            print("\nPress 'N' or Enter to continue to next scenario...")
+                            # Wait for key press
+                            waiting = True
+                            while waiting:
+                                for event in pygame.event.get():
+                                    if event.type == pygame.KEYDOWN:
+                                        if event.key in (pygame.K_n, pygame.K_RETURN, pygame.K_q, pygame.K_ESCAPE):
+                                            waiting = False
+                                            if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                                                sys.exit(0)
+                                            break
+                                import time
+                                time.sleep(0.1)
+                
+                if bucket_id != bucket_ids[-1]:
+                    print("\nPress 'N' or Enter to continue to next bucket...")
+                    waiting = True
+                    while waiting:
+                        for event in pygame.event.get():
+                            if event.type == pygame.KEYDOWN:
+                                if event.key in (pygame.K_n, pygame.K_RETURN, pygame.K_q, pygame.K_ESCAPE):
+                                    waiting = False
+                                    if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                                        sys.exit(0)
+                                    break
+                        import time
+                        time.sleep(0.1)
         
         else:
             # Single bucket mode
@@ -319,16 +456,36 @@ if __name__ == "__main__":
             print("  - Maneuver types")
             print()
             
+            image_dir = Path(args.image_dir) / f"bucket_{bucket_id}" if args.save_images else None
+            
             for i, scenario_info in enumerate(scenarios, 1):
                 print(f"\n--- Scenario {i}/{len(scenarios)} ---")
                 scenario_path = scenario_info['file_path']
                 if not Path(scenario_path).exists():
                     scenario_path = str(Path(args.scenario_dir) / Path(scenario_path).name)
                 
-                result = load_and_run_scenario(scenario_path, render=True)
+                result = load_and_run_scenario(scenario_path, render=True, image_dir=image_dir)
                 
-                if i < len(scenarios):
-                    input("\nPress Enter to run next scenario...")
+                # Check if user wants to quit
+                if result and result.get('quit'):
+                    sys.exit(0)
+                
+                # If not auto-advancing, wait for next key
+                if not result or not result.get('next'):
+                    if i < len(scenarios):
+                        print("\nPress 'N' or Enter to continue to next scenario...")
+                        # Wait for key press
+                        waiting = True
+                        while waiting:
+                            for event in pygame.event.get():
+                                if event.type == pygame.KEYDOWN:
+                                    if event.key in (pygame.K_n, pygame.K_RETURN, pygame.K_q, pygame.K_ESCAPE):
+                                        waiting = False
+                                        if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                                            sys.exit(0)
+                                        break
+                            import time
+                            time.sleep(0.1)
             
             print("\n✓ Validation complete!")
             print("\nDid the scenarios look similar? If not:")
