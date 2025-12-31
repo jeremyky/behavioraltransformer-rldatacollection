@@ -1,0 +1,8 @@
+bet/
+logs/
+*.log
+*.pt
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store

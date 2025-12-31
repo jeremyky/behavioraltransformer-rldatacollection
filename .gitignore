@@ -1,0 +1,9 @@
+# Ignore all markdown files
+*.md
+
+# But allow README.md
+!README.md
+
+# Ignore all shell scripts
+*.sh
+

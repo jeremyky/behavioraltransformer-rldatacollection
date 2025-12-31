@@ -1,0 +1,21 @@
+# Core dependencies
+gym==0.21
+stable-baselines3==1.6.2
+huggingface-sb3
+tensorboard
+tqdm
+
+# Additional required packages
+gymnasium
+transformers==4.29.2
+numpy<2.0
+scikit-learn  # For scenario clustering
+
+# PyTorch - install separately based on your system:
+# For CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# For MPS (Apple Silicon): pip install torch torchvision torchaudio
+# For CPU only: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Note: If gym==0.21 fails to install, first run:
+# pip install setuptools==65.5.0 pip==21.3.1
+# pip install more_itertools
